@@ -1,3 +1,9 @@
 
 *.spec
 screen/
+build/
+log/
+.idea/
+*.exe
+*.xml
+conf.ini
