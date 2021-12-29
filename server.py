@@ -23,8 +23,9 @@ def start():
 @server.route('/getScreen', methods=['get'])
 def get_screen():
     file_name = request.args.get('fileName')
-    file = open(file_name, 'w').read()
-    resp = Response(file, mimetype="image/png")
+    file = open(str(file_name), 'rb')
+    resp = Response(file.read(), mimetype="image/png")
+    file.close()
     return resp
 
 

@@ -6,28 +6,30 @@ import time
 import traceback
 from decimal import *
 from threading import Thread
-from log_config import log
 
 import aircv
 import cv2
 import easyocr
+import numpy as np
 import requests
+from PIL import Image
 from apscheduler.schedulers.background import BackgroundScheduler
-from we_chat import WeChat
 
 import command
+from log_config import log
+from we_chat import WeChat
 
 status = True
 lock = True
-width = None
-length = None
+width = Decimal(1440)
+length = Decimal(2560)
 
 # 读取配置
 cf = configparser.ConfigParser(allow_no_value=True)
 cf.read("conf.ini", 'utf-8')
 
 # easyocr配置
-reader = easyocr.Reader(['ch_sim'])
+reader = easyocr.Reader(['ch_sim', 'en'])
 # 定时设置
 scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
 
@@ -67,7 +69,7 @@ def start():
     except Exception as a:
         lock = True
         log.error(traceback.format_exc())
-        notify('打卡失败', a.args[0])
+        notify('打卡失败', traceback.format_exc())
         kill_ding()
 
 
@@ -139,14 +141,14 @@ def check_result():
     # 点击工作台
     command.execute_adb_command("input tap " + location(0.486, 0.961))
     # 休眠五秒
-    countdown(5)
+    countdown(8)
     # 截图
     workbench_screen_path = save_screenshot('workbench')
     countdown(2)
     # 查找考勤打卡位置
     x, y = match_img(workbench_screen_path, 'clock_in_btn.png')
     command.execute_adb_command('input tap ' + str(x) + ' ' + str(y))
-    countdown(6)
+    countdown(10)
     check_original = save_screenshot('checkOriginal')
     countdown(2)
     # 裁剪图片
@@ -155,14 +157,18 @@ def check_result():
               int(width * Decimal(0.069)):int(width * Decimal(0.903))]
     crop_path = get_file_path() + get_file_name('crop')
     cv2.imwrite(crop_path, cropped)
+    # 矩阵转换图片颜色 提高识别率
+    replace_color(crop_path, (114, 121, 130), (17, 31, 44))
     ocr_result = ocr(crop_path)
     log.info('识别结果:{}', str(ocr_result))
     result_list = [x for x in ocr_result if '已打卡' in x]
+    if len(result_list) == 0:
+        result_list = [x for x in ocr_result if '打卡' in x]
     # 发送通知
     if len(result_list) > 0:
         notify('打卡成功' + str(len(result_list)) + '次', '内容:' + ",".join(str(i) for i in result_list))
     else:
-        notify('打卡失败', '', cf.get('penetrate', 'penetrate_url') + '/getScreen/' + workbench_screen_path)
+        notify('打卡失败', '', cf.get('penetrate', 'penetrate_url') + 'getScreen?fileName=' + check_original)
 
 
 def negation_bool(b):
@@ -242,7 +248,7 @@ def start_timer():
         log.info('今天不上班')
 
 
-@scheduler.scheduled_job('cron', day_of_week='*', hour=6, minute=30)
+@scheduler.scheduled_job('cron', day_of_week='*', hour=18, minute=30)
 def off_work_timer():
     if get_working_day():
         log.info('下班打卡初始化')
@@ -295,3 +301,35 @@ def switch_state():
     global status
     status = negation_bool(status)
     return str(status)
+
+
+def replace_color(img_path, src_clr, dst_clr):
+    """ 通过矩阵操作颜色替换程序
+    @param	img:	图像矩阵
+    @param	src_clr:	需要替换的颜色(r,g,b)
+    @param	dst_clr:	目标颜色		(r,g,b)
+    @return				替换后的图像矩阵
+    """
+    img = Image.open(img_path).convert('RGB')
+    img_arr = np.asarray(img, dtype=np.double)
+
+    # 分离通道
+    r_img = img_arr[:, :, 0].copy()
+    g_img = img_arr[:, :, 1].copy()
+    b_img = img_arr[:, :, 2].copy()
+
+    # 编码
+    img = r_img * 256 * 256 + g_img * 256 + b_img
+    src_color = src_clr[0] * 256 * 256 + src_clr[1] * 256 + src_clr[2]
+
+    # 索引并替换颜色
+    r_img[img == src_color] = dst_clr[0]
+    g_img[img == src_color] = dst_clr[1]
+    b_img[img == src_color] = dst_clr[2]
+
+    # 合并通道
+    dst_img = np.array([r_img, g_img, b_img], dtype=np.uint8)
+    # 将数据转换为图像数据(h,w,c)
+    dst_img = dst_img.transpose(1, 2, 0)
+    res_img = Image.fromarray(dst_img)
+    res_img.save(img_path)
